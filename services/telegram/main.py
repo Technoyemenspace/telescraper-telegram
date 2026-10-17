@@ -11,12 +11,24 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
+import datetime
+
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from telethon import TelegramClient, errors
 from telethon.tl.types import MessageEntityTextUrl
 
-from rules import CHANNEL_DELAY_SECONDS, DEPTHS, TARGET_REGEX, extract
+from rules import (
+    CHANNEL_DELAY_SECONDS,
+    DEPTHS,
+    TARGET_REGEX,
+    WEB_DELAY_SECONDS,
+    extract,
+    extract_web,
+    parse_ddg,
+    web_queries,
+)
 
 
 @asynccontextmanager
@@ -181,3 +193,44 @@ async def scan(data: ScanInput, request: Request):
             raise HTTPException(504, 'Telegram connection timed out') from None
         leads, duplicates = extract(messages, data.channel, data.keywords, set(data.seen))
         return {'leads': leads, 'duplicates': duplicates, 'messages': len(messages)}
+
+
+class WebScanInput(BaseModel):
+    platform: Literal['facebook', 'instagram', 'twitter', 'telegram', 'web']
+    depth: Literal[100, 500, 3000] = 100
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    seen: list[str] = Field(default_factory=list, max_length=10000)
+
+    @field_validator('keywords', 'seen')
+    @classmethod
+    def validate_strings(cls, values):
+        if any(not v.strip() or len(v) > 512 for v in values):
+            raise ValueError('Invalid filter or URL')
+        return values
+
+
+@app.post('/webscan', dependencies=[Depends(authorized)])
+async def webscan(data: WebScanInput, request: Request):
+    """Public web/social dork search. No platform login required; only indexed WhatsApp links."""
+    seen = set(data.seen)
+    leads, duplicates, queries_done = [], 0, 0
+    today = datetime.date.today().isoformat()
+    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36'}
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=True) as client:
+            for query in web_queries(data.platform, data.keywords):
+                if len(leads) >= data.depth:
+                    break
+                try:
+                    async with asyncio.timeout(20):
+                        response = await client.post('https://html.duckduckgo.com/html/', data={'q': query})
+                    queries_done += 1
+                    found, dupes = extract_web(parse_ddg(response.text), data.platform, data.keywords, seen, today)
+                    leads.extend(found)
+                    duplicates += dupes
+                except (asyncio.TimeoutError, httpx.HTTPError):
+                    continue
+                await asyncio.sleep(WEB_DELAY_SECONDS)
+    except asyncio.TimeoutError:
+        raise HTTPException(504, 'Web search timed out') from None
+    return {'leads': leads[:data.depth], 'duplicates': duplicates, 'queries': queries_done}
