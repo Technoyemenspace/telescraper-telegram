@@ -2,3 +2,4 @@ fastapi==0.115.12
 uvicorn==0.34.2
 Telethon==1.40.0
 pydantic==2.11.4
+httpx==0.28.1
