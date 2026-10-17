@@ -1,9 +1,38 @@
-# Render Telegram service
+# Telegram service (free hosting)
 
-This prepares real MTProto QR login and channel history extraction. It has not
-been deployed or connected to the dashboard. The dashboard remains demo-only.
+Real MTProto QR login and channel history extraction. The service code is
+mirrored at https://github.com/Technoyemenspace/telescraper-telegram.
 
-## Deployment
+## Hosting paths
+
+- **Render Free** requires a payment card on the account even for the free plan
+  (security verification). If a card is added, create the service from the
+  repository root `render.yaml` (free plan, no paid disk).
+- **Hugging Face Spaces (chosen cardless path)**: create a free Hugging Face
+  account, generate an access token with write scope, and the Space is deployed
+  from `Dockerfile` (see below). No card is ever required.
+
+## Hugging Face deployment
+
+1. Create a Space (Docker SDK, public visibility is fine: every path except
+   `/health` requires `X-Service-Key`).
+2. The Space repository needs: `Dockerfile`, `main.py`, `rules.py`,
+   `requirements.txt`, and a `README.md` with:
+
+```yaml
+---
+title: TeleScraper Telegram Service
+app_port: 7860
+---
+```
+
+3. Add the Space secrets `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`,
+   `TELEGRAM_SERVICE_KEY` (Space settings → Variables and secrets).
+4. Free Spaces sleep after about 48 hours of inactivity; storage is ephemeral,
+   so the user scans a new QR after a restart. This is not uninterrupted
+   production hosting.
+
+## Previous Render deployment steps
 
 1. Put this project in a connected Git repository (Lovable Settings → GitHub).
 2. In Render, create a Blueprint from that repository using root `render.yaml`.
@@ -20,7 +49,7 @@ password. A Render API key alone does not supply a Git repository.
 ## Free hosting limitations
 
 Render Free spins down after 15 minutes without inbound traffic, and waking up
-can take about a minute. Session files disappear on restart, redeploy, or spin-down;
+can take about a minute. Session files disappear on restart, redeplay, or spin-down;
 the user must scan a new QR after that. No paid disk is configured. Render also
 limits free instance hours and bandwidth; do not upgrade or incur charges on the
 user's behalf. This is not uninterrupted production hosting.
