@@ -73,6 +73,22 @@ def parse_ddg(body):
     return results
 
 
+def parse_bing(body):
+    """Parse Bing HTML results into title/url/snippet records."""
+    results = []
+    for block in re.findall(r'<li class="b_algo".*?</li>', body, re.S):
+        match = re.search(r'<h2><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+        if not match:
+            continue
+        snippet_match = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
+        results.append({
+            'title': html.unescape(re.sub(r'<[^>]+>', '', match.group(2))).strip(),
+            'url': html.unescape(match.group(1)),
+            'snippet': html.unescape(re.sub(r'<[^>]+>', '', snippet_match.group(1))).strip() if snippet_match else '',
+        })
+    return results
+
+
 def extract_web(results, platform, keywords, seen, date):
     """Keep WhatsApp links only when the result title/snippet contains the target keyword exactly."""
     leads, duplicates = [], 0
