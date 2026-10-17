@@ -141,7 +141,7 @@ class ScanInput(BaseModel):
     @field_validator('channel')
     @classmethod
     def validate_channel(cls, value):
-        if not TARGET_REEXX.fullmatch(value):
+        if not TARGET_REGEX.fullmatch(value):
             raise ValueError('Invalid channel handle')
         return value
 
