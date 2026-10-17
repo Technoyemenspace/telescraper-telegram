@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from main import ScanInput, WebScanInput, authorized
-from rules import CHANNEL_DELAY_SECONDS, DEPTHS, WEB_PLATFORMS, canonical_wa, extract, extract_web, parse_ddg, web_queries
+from rules import CHANNEL_DELAY_SECONDS, DEPTHS, WEB_PLATFORMS, canonical_wa, extract, extract_web, parse_bing, parse_ddg, web_queries
 
 
 class RulesTests(unittest.TestCase):
@@ -52,6 +52,16 @@ class WebSearchTests(unittest.TestCase):
         results = parse_ddg(body)
         self.assertEqual(results[0]['url'], 'https://www.facebook.com/groups/1')
         self.assertEqual(results[0]['title'], 'مجموعة عقارات اليمن')
+        self.assertIn('chat.whatsapp.com', results[0]['snippet'])
+
+    def test_parse_bing(self):
+        body = (
+            '<li class="b_algo"><h2><a href="https://www.instagram.com/p/1/">مجموعة <b>وظائف</b> العراق</a></h2>'
+            '<p>انضم عبر https://chat.whatsapp.com/BBBBBBBBBBBBBBBBBBBBBB</p></li>'
+        )
+        results = parse_bing(body)
+        self.assertEqual(results[0]['url'], 'https://www.instagram.com/p/1/')
+        self.assertEqual(results[0]['title'], 'مجموعة وظائف العراق')
         self.assertIn('chat.whatsapp.com', results[0]['snippet'])
 
     def test_exact_keyword_filter_and_dedup(self):
