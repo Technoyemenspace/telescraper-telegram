@@ -26,6 +26,7 @@ from rules import (
     WEB_DELAY_SECONDS,
     extract,
     extract_web,
+    parse_bing,
     parse_ddg,
     web_queries,
 )
@@ -209,28 +210,55 @@ class WebScanInput(BaseModel):
         return values
 
 
+SEARCH_TARGETS = (
+    ('post', 'https://html.duckduckgo.com/html/', parse_ddg),
+    ('get', 'https://html.duckduckgo.com/html/', parse_ddg),
+    ('get', 'https://lite.duckduckgo.com/lite/', parse_ddg),
+    ('get', 'https://www.bing.com/search', parse_bing),
+)
+
+
+async def run_search_query(client, query):
+    """Try search endpoints in order; return the first non-empty parsed result set."""
+    for method, url, parser in SEARCH_TARGETS:
+        try:
+            if method == 'post':
+                response = await client.post(url, data={'q': query})
+            else:
+                response = await client.get(url, params={'q': query})
+            if response.status_code == 200:
+                results = parser(response.text)
+                if results:
+                    return results
+        except (httpx.HTTPError, asyncio.TimeoutError):
+            continue
+    return []
+
+
 @app.post('/webscan', dependencies=[Depends(authorized)])
 async def webscan(data: WebScanInput, request: Request):
     """Public web/social dork search. No platform login required; only indexed WhatsApp links."""
     seen = set(data.seen)
     leads, duplicates, queries_done = [], 0, 0
     today = datetime.date.today().isoformat()
-    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36'}
-    try:
-        async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=True) as client:
-            for query in web_queries(data.platform, data.keywords):
-                if len(leads) >= data.depth:
-                    break
-                try:
-                    async with asyncio.timeout(20):
-                        response = await client.post('https://html.duckduckgo.com/html/', data={'q': query})
-                    queries_done += 1
-                    found, dupes = extract_web(parse_ddg(response.text), data.platform, data.keywords, seen, today)
-                    leads.extend(found)
-                    duplicates += dupes
-                except (asyncio.TimeoutError, httpx.HTTPError):
-                    continue
-                await asyncio.sleep(WEB_DELAY_SECONDS)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, 'Web search timed out') from None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ar,en;q=0.8',
+    }
+    async with httpx.AsyncClient(timeout=12, headers=headers, follow_redirects=True) as client:
+        for query in web_queries(data.platform, data.keywords):
+            if len(leads) >= data.depth:
+                break
+            try:
+                async with asyncio.timeout(25):
+                    results = await run_search_query(client, query)
+            except asyncio.TimeoutError:
+                continue
+            if results:
+                queries_done += 1
+                found, dupes = extract_web(results, data.platform, data.keywords, seen, today)
+                leads.extend(found)
+                duplicates += dupes
+            await asyncio.sleep(WEB_DELAY_SECONDS)
     return {'leads': leads[:data.depth], 'duplicates': duplicates, 'queries': queries_done}
