@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from telethon import TelegramClient, errors
 from telethon.tl.types import MessageEntityTextUrl
+from history import history_page
 
 from rules import (
     CHANNEL_DELAY_SECONDS,
@@ -28,6 +29,7 @@ from rules import (
     extract_web,
     parse_bing,
     parse_ddg,
+    parse_ddg_lite,
     web_queries,
 )
 
@@ -148,8 +150,11 @@ async def logout(request: Request):
 class ScanInput(BaseModel):
     channel: str = Field(min_length=5, max_length=33)
     depth: Literal[100, 500, 3000] = 100
-    keywords: list[str] = Field(default_factory=list, max_length=100)
+    keywords: list[str] = Field(default_factory=list, max_length=400)
     seen: list[str] = Field(default_factory=list, max_length=10000)
+    all_history: bool = False
+    after_id: int = Field(default=0, ge=0)
+    snapshot_id: int | None = Field(default=None, ge=0)
 
     @field_validator('channel')
     @classmethod
@@ -176,9 +181,14 @@ async def scan(data: ScanInput, request: Request):
         # Serialized operations and a real delay protect the single Telegram account.
         await asyncio.sleep(CHANNEL_DELAY_SECONDS)
         messages = []
+        next_id, snapshot_id = None, data.snapshot_id
         try:
             async with asyncio.timeout(60):
-                async for message in state.client.iter_messages(data.channel, limit=data.depth):
+                if data.all_history:
+                    page, next_id, snapshot_id = await history_page(state.client, data.channel, data.after_id, data.snapshot_id)
+                else:
+                    page = [message async for message in state.client.iter_messages(data.channel, limit=data.depth)]
+                for message in page:
                     text = message.raw_text or ''
                     embedded = [e.url for e in message.entities or [] if isinstance(e, MessageEntityTextUrl)]
                     text = '\n'.join([text, *embedded])
@@ -193,7 +203,7 @@ async def scan(data: ScanInput, request: Request):
         except (asyncio.TimeoutError, OSError):
             raise HTTPException(504, 'Telegram connection timed out') from None
         leads, duplicates = extract(messages, data.channel, data.keywords, set(data.seen))
-        return {'leads': leads, 'duplicates': duplicates, 'messages': len(messages)}
+        return {'leads': leads, 'duplicates': duplicates, 'messages': len(messages), 'nextMessageId': next_id, 'snapshotId': snapshot_id}
 
 
 class WebScanInput(BaseModel):
@@ -213,7 +223,7 @@ class WebScanInput(BaseModel):
 SEARCH_TARGETS = (
     ('post', 'https://html.duckduckgo.com/html/', parse_ddg),
     ('get', 'https://html.duckduckgo.com/html/', parse_ddg),
-    ('get', 'https://lite.duckduckgo.com/lite/', parse_ddg),
+    ('get', 'https://lite.duckduckgo.com/lite/', parse_ddg_lite),
     ('get', 'https://www.bing.com/search', parse_bing),
 )
 
