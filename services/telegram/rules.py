@@ -73,6 +73,28 @@ def parse_ddg(body):
     return results
 
 
+def parse_ddg_lite(body):
+    """Parse the DuckDuckGo Lite HTML results (single-quoted class attributes)."""
+    results = []
+    anchors = re.findall(r"<a[^>]*class='result-link'[^>]*>(.*?)</a>", body, re.S)
+    hrefs = [html.unescape(m) for m in re.findall(r"<a[^>]*class='result-link'[^>]*>", body)]
+    snippets = [
+        html.unescape(re.sub(r'<[^>]+>', '', s)).strip()
+        for s in re.findall(r"<td class='result-snippet'>(.*?)</td>", body, re.S)
+    ]
+    for i, title in enumerate(anchors):
+        href_match = re.search(r'href="([^"]+)"', hrefs[i]) if i < len(hrefs) else None
+        href = html.unescape(href_match.group(1)) if href_match else ''
+        if 'uddg=' in href:
+            href = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
+        results.append({
+            'title': html.unescape(re.sub(r'<[^>]+>', '', title)).strip(),
+            'url': href,
+            'snippet': snippets[i] if i < len(snippets) else '',
+        })
+    return results
+
+
 def parse_bing(body):
     """Parse Bing HTML results into title/url/snippet records."""
     results = []
