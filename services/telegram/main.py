@@ -90,10 +90,21 @@ async def wait_for_qr(state):
         state.status = 'failed'
 
 
+async def ensure_connected(state):
+    """The HTTP service can stay healthy after the MTProto socket disconnects."""
+    try:
+        async with asyncio.timeout(20):
+            if not state.client.is_connected():
+                await state.client.connect()
+    except (OSError, asyncio.TimeoutError):
+        raise HTTPException(503, 'Telegram connection unavailable; retry shortly') from None
+
+
 @app.post('/session/qr', dependencies=[Depends(authorized)])
 async def create_qr(request: Request):
     state = request.app.state
     async with state.lock:
+        await ensure_connected(state)
         if await state.client.is_user_authorized():
             state.status = 'active'
             return {'status': 'active'}
@@ -101,7 +112,14 @@ async def create_qr(request: Request):
             state.qr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await state.qr_task
-        state.qr = await state.client.qr_login()
+        try:
+            async with asyncio.timeout(20):
+                state.qr = await state.client.qr_login()
+        except errors.FloodWaitError as exc:
+            raise HTTPException(429, detail={'code': 'flood_wait', 'seconds': exc.seconds}) from None
+        except (OSError, asyncio.TimeoutError):
+            state.status = 'failed'
+            raise HTTPException(503, 'Telegram connection unavailable; retry shortly') from None
         state.status = 'waiting'
         state.qr_task = asyncio.create_task(wait_for_qr(state))
         return {'status': state.status, 'url': state.qr.url, 'expires': state.qr.expires.isoformat()}
@@ -109,7 +127,10 @@ async def create_qr(request: Request):
 
 @app.get('/session', dependencies=[Depends(authorized)])
 async def session(request: Request):
-    return {'status': request.app.state.status}
+    state = request.app.state
+    if state.status == 'waiting' and state.qr and state.qr.expires <= datetime.datetime.now(datetime.timezone.utc):
+        state.status = 'expired'
+    return {'status': state.status}
 
 
 class PasswordInput(BaseModel):
@@ -122,6 +143,7 @@ async def password(data: PasswordInput, request: Request):
     async with state.lock:
         if state.status != 'password_required':
             raise HTTPException(409, 'No password challenge is pending')
+        await ensure_connected(state)
         try:
             await state.client.sign_in(password=data.password)
         except errors.PasswordHashInvalidError:
@@ -140,6 +162,7 @@ async def logout(request: Request):
             state.qr_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await state.qr_task
+        await ensure_connected(state)
         await state.client.log_out()
         await state.client.connect()
         state.qr = None
@@ -175,6 +198,7 @@ class ScanInput(BaseModel):
 async def scan(data: ScanInput, request: Request):
     state = request.app.state
     async with state.lock:
+        await ensure_connected(state)
         if not await state.client.is_user_authorized():
             state.status = 'idle'
             raise HTTPException(409, 'Connect Telegram first')
